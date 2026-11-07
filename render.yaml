@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: agronavis-api
+    runtime: node
+    plan: free
+    region: singapore
+    # NODE_ENV=production makes npm omit devDependencies, which drops the
+    # compiler. --include=dev keeps the build toolchain; the prune sheds it
+    # again once dist/ exists.
+    buildCommand: npm ci --include=dev && npm run build && npm prune --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Everything below is environment-specific and set in the Render
+      # dashboard. Nothing that varies per deployment is committed here.
+      - key: APP_ENV
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # The app: farmers, fields, soil, weather, fires, satellite, market.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: OPENWEATHER_API_KEY
+        sync: false
+      - key: FIRMS_MAP_KEY
+        sync: false
+      - key: AGMARKNET_API_KEY
+        sync: false
+      - key: TOTP_ENCRYPTION_KEY
+        sync: false
+
+      # The website: contact, demo, newsletter, careers, account deletion.
+      # Leave these unset and those routes answer 503 with an address to
+      # write to; everything the app depends on is unaffected.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CONTACT_TO
+        sync: false
+      - key: CONTACT_FROM
+        sync: false
+      - key: SITE_URL
+        sync: false
+      - key: SEND_AUTOREPLY
+        sync: false
