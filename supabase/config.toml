@@ -1,0 +1,36 @@
+# Supabase CLI project config.
+# The migrations in ./migrations are the single source of truth for the
+# Agronavis schema. Apply them with:  npm run db:push
+project_id = "agronavis"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "agronavis://"
+additional_redirect_urls = ["agronavis://", "http://localhost:8081"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"

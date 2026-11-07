@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    // Tests are excluded below, so the production build has no use for jest's
+    // types — and Render installs with NODE_ENV=production, which omits
+    // devDependencies, so @types/jest is not even on disk there.
+    "types": ["node"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": false,
+    "sourceMap": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@agronavis/shared-types": ["./src/types/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["tests/**/*", "**/*.test.ts"]
+}

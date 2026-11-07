@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+
+# Secrets. The example is committed; the real file never is.
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
+# This volume writes AppleDouble sidecars beside every file.
+._*
+**/._*
+
+supabase/.temp/
