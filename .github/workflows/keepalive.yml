@@ -1,0 +1,36 @@
+name: Keep the API awake
+
+# The instance spins down after fifteen minutes of quiet and takes about a
+# minute to wake. During that minute the edge answers instead of the app, with
+# no CORS headers, so a browser form submission fails outright — and a farmer
+# opening the app waits out the whole start-up.
+#
+# Free on a public repository. GitHub's schedules are best effort and can run
+# late under load, so the interval is well inside the fifteen minutes rather
+# than at the edge of it.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+# A ping that is still running when the next one starts is a ping that failed.
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake the API
+        run: |
+          # --max-time covers a full cold start; retries cover a wake that
+          # takes longer than one request is willing to wait.
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
+                   --max-time 90 --retry 2 --retry-delay 20 --retry-all-errors \
+                   https://agronavis-api.onrender.com/health)
+          echo "status: $code"
+          cat /tmp/health.json
+          echo
+          test "$code" = "200"
