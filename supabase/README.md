@@ -1,57 +1,51 @@
 # Database
 
-These SQL files are the **only** definition of the Agronavis schema. There is no
-second ORM schema to keep in sync — the API reads and writes through
-`@supabase/supabase-js`, and its TypeScript types are generated from this
-database into `packages/shared-types/src/database.types.ts`.
+The 28 files in `migrations/` are the only definition of the schema. One
+Supabase project serves both callers: `0001`–`0022` are the app's tables,
+`0023`–`0028` the website's.
 
 ## Applying
 
 ```bash
-npm run db:link      # one-time, reads SUPABASE_URL from the root .env
-npm run db:push      # apply pending migrations to the linked project
-npm run db:types     # regenerate database.types.ts from the live schema
+npm run db:link     # once per machine; reads the ref out of SUPABASE_URL
+npm run db:push     # applies anything the remote has not seen
+npm run db:list     # what is applied where
 ```
 
-Or paste a file into the Supabase dashboard SQL editor, in numeric order.
-Every migration is idempotent, so re-running one is safe.
+`db:push` compares filenames against the remote history, so **never rename an
+applied migration** — it would be pushed a second time. Add a new one instead.
 
-## Order
-
-| File | Contents |
-|---|---|
-| `0001_core_schema.sql` | `farmers` / `farms` / `crops` / `sensor_readings` / `advisories`, the `auth.users` → `farmers` signup trigger, base RLS |
-| `0002_avatars_bucket.sql` | `avatars` storage bucket + policies |
-| `0003_extended_schema.sql` | `farm_fields`, `farm_tasks`, `crop_scans`, `soil_health_history`, `yield_history`, `crop_varieties`, `crop_diseases`, `regional_soil_data`, `farm_resources`, `community_posts`, `community_replies` |
-| `0004_regional_soil_seed.sql` | District-level NPK reference data |
-| `0005_community_media.sql` | `community-media` bucket + `community_posts.media_type` |
-| `0006_platform_alignment.sql` | Agronomy profile and TOTP 2FA columns, farm coordinates promoted out of the `location` blob, 4-level advisory severity + de-duplication, market-price trend columns, `weather_snapshots`, the `crop-scans` bucket, RLS for the new tables |
-| `0007_account_deletion_cascade.sql` | `farmers.id` → `auth.users.id` cascade, so deleting an account succeeds |
-
-## Adding a migration
+## A new migration
 
 ```bash
-supabase db diff -f describe_your_change   # writes the next numbered file
+npm run db:new add_something     # writes the next file
+npm run db:push
+npm run db:types                 # regenerate src/types/database.generated.ts
 ```
 
-Never edit an already-applied migration — add a new one.
+Write them idempotent — `if not exists`, `drop policy if exists` — so
+re-running one is safe.
 
-## A note on this project's history
+## Testing against a real Postgres
 
-The live database predates these files: its schema was built by a set of
-migrations recorded under timestamp versions (`20251007142940` and later) whose
-SQL is not in this repository. Files `0001`–`0005` describe that same schema, so
-they were marked applied rather than replayed:
+Needs Docker.
 
 ```bash
-supabase migration repair --status applied  0001 0002 0003 0004 0005
-supabase migration repair --status reverted 20251007142940 …   # the orphaned entries
+npm run db:start    # local stack on :54321, applies every migration, then seeds
+npm run db:reset    # wipe and replay from 0001 — the real test of ordering
+npm run db:stop
 ```
 
-That edits only `supabase_migrations.schema_migrations`, never the schema
-itself. `0006` was then written against the *deployed* column list — not against
-an idealised one — which is why it renames rather than recreates
-(`market_prices.price_date` → `arrival_date`, `notifications.is_read` → `read`)
-and backfills `farms.latitude` / `longitude` out of the old `location` jsonb.
+`db:reset` is what catches a migration that only works because of the state
+already in your remote.
 
-From `0006` onward, local and remote histories agree.
+## RLS
+
+| Table | Who can read it |
+| --- | --- |
+| `applications`, `deletion_requests` | RLS on, no policies — service role only |
+| `openings` | anyone, where `is_active` |
+| app tables | per-farmer policies, see `0001` and `0006` |
+
+The API holds the service-role key and bypasses all of it, which is why no
+route outside `modules/web` may be mounted without `requireAuth`.
