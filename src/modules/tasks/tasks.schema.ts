@@ -4,6 +4,8 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
 export const listTasksSchema = z.object({
   farmId: z.string().uuid().optional(),
+  /** Narrows to the crops growing in one field. Omit for the whole farm. */
+  fieldId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 

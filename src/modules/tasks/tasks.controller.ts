@@ -5,8 +5,12 @@ import { tasksService } from './tasks.service';
 
 export const tasksController = {
   async list(req: Request, res: Response) {
-    const { farmId, limit } = req.query as unknown as { farmId?: string; limit: number };
-    const data = await tasksService.listOpen(farmerId(req), farmId, limit);
+    const { farmId, fieldId, limit } = req.query as unknown as {
+      farmId?: string;
+      fieldId?: string;
+      limit: number;
+    };
+    const data = await tasksService.listOpen(farmerId(req), farmId, limit, fieldId);
     ok(res, data, { count: data.length });
   },
 

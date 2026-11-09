@@ -23,16 +23,48 @@ function toTask(row: FarmTaskRow): FarmTask {
 }
 
 export const tasksService = {
-  /** Open tasks, soonest first. Completed and skipped work is excluded. */
-  async listOpen(farmerId: string, farmId?: string, limit = 20): Promise<FarmTask[]> {
+  /**
+   * Open tasks, soonest first. Completed and skipped work is excluded.
+   *
+   * Scoped to a field when one is given. A farm can hold several fields with
+   * different crops in them, and sowing dates for the cotton in one plot are
+   * not work to be done in the plot growing rice — showing every task against
+   * every field made the list meaningless as soon as a second crop existed.
+   *
+   * Tasks carry a crop rather than a field, so the field is resolved through
+   * its crops. A task with no crop belongs to the farm rather than to any one
+   * plot, so it stays visible whichever field is selected.
+   */
+  async listOpen(
+    farmerId: string,
+    farmId?: string,
+    limit = 20,
+    fieldId?: string,
+  ): Promise<FarmTask[]> {
     const farmIds = farmId ? [(await assertOwnsFarm(farmerId, farmId)).id] : await listOwnedFarmIds(farmerId);
     if (farmIds.length === 0) return [];
 
-    const { data, error } = await db
+    let query = db
       .from('farm_tasks')
       .select('*')
       .in('farm_id', farmIds)
-      .not('status', 'in', '("completed","skipped")')
+      .not('status', 'in', '("completed","skipped")');
+
+    if (fieldId) {
+      const { data: cropRows, error: cropError } = await db
+        .from('crops')
+        .select('id')
+        .eq('field_id', fieldId)
+        .eq('farmer_id', farmerId);
+      if (cropError) throw fromPostgrest(cropError, 'List tasks');
+
+      const cropIds = (cropRows ?? []).map((c) => (c as { id: string }).id);
+      query = cropIds.length > 0
+        ? query.or(`crop_id.is.null,crop_id.in.(${cropIds.join(',')})`)
+        : query.is('crop_id', null);
+    }
+
+    const { data, error } = await query
       .order('due_date', { ascending: true })
       .limit(limit);
     if (error) throw fromPostgrest(error, 'List tasks');
