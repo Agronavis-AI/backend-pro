@@ -36,6 +36,17 @@ services:
       - key: TOTP_ENCRYPTION_KEY
         sync: false
 
+      # Online Sahayak: free tiers serving open-weight models. Either provider
+      # is enough; both give a fallback when one runs out of daily quota.
+      # SAHAYAK_MODELS and SAHAYAK_DAILY_LIMIT have defaults in
+      # src/config/env.ts and can be overridden here. See docs/AI_SETUP.md.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+
       # The website: contact, demo, newsletter, careers, account deletion.
       # Leave these unset and those routes answer 503 with an address to
       # write to; everything the app depends on is unaffected.

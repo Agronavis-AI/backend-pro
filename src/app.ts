@@ -13,6 +13,7 @@ import { authRoutes } from './modules/auth/auth.routes';
 import { communityRoutes } from './modules/community/community.routes';
 import { cropRoutes } from './modules/crops/crops.routes';
 import { fireRoutes } from './modules/fires/fires.routes';
+import { sahayakRoutes } from './modules/sahayak/sahayak.routes';
 import { satelliteRoutes } from './modules/satellite/satellite.routes';
 import { farmerRoutes } from './modules/farmers/farmers.routes';
 import { farmRoutes } from './modules/farms/farms.routes';
@@ -94,6 +95,7 @@ export function createApp(): Application {
   app.use(`${prefix}/community`, communityRoutes);
   app.use(`${prefix}/notifications`, notificationRoutes);
   app.use(`${prefix}/storage`, storageRoutes);
+  app.use(`${prefix}/sahayak`, sahayakRoutes);
 
   /**
    * The website's forms, mounted twice on purpose.
@@ -126,6 +128,7 @@ export function createApp(): Application {
         'community',
         'notifications',
         'storage',
+        'sahayak',
       ],
     });
   });
