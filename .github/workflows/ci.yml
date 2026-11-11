@@ -1,0 +1,76 @@
+name: CI
+
+# The checks the app repo ran on this code before it moved here. Without them
+# a pull request merges on trust, and Render deploys whatever lands on main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # onnxruntime-node ships the linux-x64 CPU binaries inside the package; its
+  # postinstall only fetches the CUDA ones on top. Runners have no GPU and the
+  # scanner pins the CPU provider, so that download buys nothing.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  verify:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # tests/setup.ts supplies the environment the API validates at import
+      # time, so no secrets are needed here.
+      - name: Test
+        run: npm test
+
+  build:
+    name: Build API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Compiling is not the same as being loadable: a runtime import of
+      # TypeScript-only source compiles and then will not boot. This loads
+      # every route, service and schema, stopping short of server.js, which
+      # opens a database connection.
+      - name: Load the built server
+        env:
+          NODE_ENV: production
+          SUPABASE_URL: https://example.supabase.co
+          # Only the shape is checked on load; nothing is ever called with it.
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key-not-a-real-secret
+        run: node -e "require('./dist/app.js'); console.log('built server loads')"
