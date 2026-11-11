@@ -55,6 +55,8 @@ export const cropsController = {
 
   async diagnoseScan(req: Request, res: Response) {
     if (!req.file) throw badRequest('No image uploaded — send it as multipart field "image"');
-    ok(res, await diagnose(req.file.buffer));
+    // Optional text part next to the image: what the farmer says the crop is.
+    const crop = typeof req.body?.crop === 'string' ? req.body.crop.trim().slice(0, 40) : undefined;
+    ok(res, await diagnose(req.file.buffer, { crop: crop || undefined }));
   },
 };

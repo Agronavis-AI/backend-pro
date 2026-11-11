@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../config/logger';
 import { db } from '../config/supabase';
-import { readableClass } from '../modules/crops/diagnose.service';
+import { parseLabelSet, readableClass, type LabelClass } from '../modules/crops/disease-labels';
 
 /**
  * Fills the reference library from the classes the scanner can actually return.
@@ -18,6 +18,8 @@ import { readableClass } from '../modules/crops/diagnose.service';
  * farmer a crop, so they stay blank until seeded from a source worth citing.
  */
 const CLASSES_PATH = path.join(__dirname, '../../model/class_names.json');
+/** Present once the field-trained model is installed; its classes win. */
+const V2_LABELS_PATH = path.join(__dirname, '../../model/v2/labels.json');
 
 export interface DiseaseSeedRow {
   class_key: string;
@@ -49,6 +51,24 @@ export function toDiseaseRows(classKeys: string[]): DiseaseSeedRow[] {
   });
 }
 
+/** The v2 label file's classes as library rows; crop and condition are given, not parsed. */
+export function toDiseaseRowsFromLabels(classes: LabelClass[]): DiseaseSeedRow[] {
+  const seen = new Set<string>();
+  return classes.flatMap((c) => {
+    if (!c.key || seen.has(c.key)) return [];
+    seen.add(c.key);
+    return [
+      {
+        class_key: c.key,
+        name: c.condition,
+        crop_type: c.crop,
+        is_healthy: c.healthy,
+        severity: c.healthy ? 'none' : null,
+      },
+    ];
+  });
+}
+
 export async function runDiseaseSeed(): Promise<{ rows: number; healthy: number }> {
   const { data: run } = await db
     .from('ingestion_runs')
@@ -58,8 +78,14 @@ export async function runDiseaseSeed(): Promise<{ rows: number; healthy: number 
   const runId = run?.id as string | undefined;
 
   try {
-    const keys = JSON.parse(fs.readFileSync(CLASSES_PATH, 'utf8')) as string[];
-    const rows = toDiseaseRows(keys);
+    // Seeded from both generations: scans already filed under v1 keys must
+    // still resolve, and v2 adds the field-trained classes.
+    const v1 = toDiseaseRows(JSON.parse(fs.readFileSync(CLASSES_PATH, 'utf8')) as string[]);
+    const v2 = fs.existsSync(V2_LABELS_PATH)
+      ? toDiseaseRowsFromLabels(parseLabelSet(JSON.parse(fs.readFileSync(V2_LABELS_PATH, 'utf8'))).classes)
+      : [];
+    const v2Keys = new Set(v2.map((r) => r.class_key));
+    const rows = [...v2, ...v1.filter((r) => !v2Keys.has(r.class_key))];
     if (rows.length === 0) throw new Error('No classes read — leaving the library alone.');
 
     const { error } = await db.from('crop_diseases').upsert(rows, { onConflict: 'class_key' });

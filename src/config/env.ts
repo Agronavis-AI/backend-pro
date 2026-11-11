@@ -85,6 +85,23 @@ const envSchema = z
       .default('false')
       .transform((v) => v === 'true'),
 
+    /**
+     * Online Sahayak. Both are free tiers serving open-weight models; either
+     * one is enough, both give a fallback when one runs out of daily quota.
+     * Groq: console.groq.com/keys. Cloudflare: dash.cloudflare.com → AI →
+     * Workers AI → "Use REST API" (account id + a token with Workers AI read).
+     * Cloudflare also provides the bge-m3 embeddings the knowledge search uses.
+     */
+    GROQ_API_KEY: z.string().optional(),
+    CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
+    CLOUDFLARE_API_TOKEN: z.string().optional(),
+    /** Tried in order; see modules/sahayak/providers.ts. */
+    SAHAYAK_MODELS: z
+      .string()
+      .default('groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b,cloudflare:@cf/google/gemma-4-26b-a4b-it'),
+    /** Online answers per farmer per day before the app falls back to the phone. */
+    SAHAYAK_DAILY_LIMIT: z.coerce.number().int().positive().default(40),
+
     ENABLE_JOBS: z
       .enum(['true', 'false'])
       .default('true')
@@ -144,4 +161,10 @@ export function reportOptionalEnv(warn: (msg: string) => void): void {
   if (!env.OPENWEATHER_API_KEY) warn('OPENWEATHER_API_KEY is not set — weather endpoints will fail');
   if (!env.AGMARKNET_API_KEY) warn('AGMARKNET_API_KEY is not set — mandi prices will be empty');
   if (!env.TOTP_ENCRYPTION_KEY) warn('TOTP_ENCRYPTION_KEY is not set — two-factor auth is disabled');
+  if (!env.GROQ_API_KEY && !(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN)) {
+    warn('No GROQ_API_KEY or CLOUDFLARE_* keys — online Sahayak is off; phones use their own model');
+  }
+  if (!(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN)) {
+    warn('CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN not set — knowledge search matches words only');
+  }
 }

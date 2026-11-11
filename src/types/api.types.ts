@@ -175,6 +175,38 @@ export interface DiseasePrediction {
   plantDetected: boolean;
   /** Strongest first, at most three. */
   predictions: DiseaseCandidate[];
+  /**
+   * The crop the farmer said this is, when the model knows it. The ranking is
+   * then among that crop's conditions only — a rice leaf is never "tomato
+   * blight" — and `confident` also requires the photo to look like that crop.
+   */
+  crop?: string | null;
+  /** Which model answered, e.g. "v2" — lets a scan be traced to its weights. */
+  modelVersion?: string;
+}
+
+/** A note the online Sahayak cited, e.g. "Kisan Call Centre · West Bengal · rice". */
+export interface SahayakSource {
+  label: string;
+  url: string | null;
+}
+
+export interface SahayakChatRequest {
+  question: string;
+  /** The system prompt the app built from the farmer's own records. */
+  context?: string;
+  history?: { role: 'user' | 'assistant'; text: string }[];
+  /** Lines looked up for this question, such as today's mandi rates. */
+  facts?: string[];
+  state?: string;
+  language?: string;
+}
+
+export interface SahayakChatResponse {
+  answer: string;
+  sources: SahayakSource[];
+  /** "provider:model" that answered. */
+  model: string;
 }
 
 export interface CropScan {

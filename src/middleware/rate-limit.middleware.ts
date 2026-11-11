@@ -128,6 +128,16 @@ export const upstreamLimiter = tier('upstream', 60_000, 60);
 export const inferenceLimiter = tier('inference', 60_000, 10);
 
 /**
+ * Online Sahayak. Every answer spends free model quota that all farmers share,
+ * so there are two limits: six a minute stops a retry loop, and the daily one
+ * (SAHAYAK_DAILY_LIMIT) stops one person spending everyone's allowance. A
+ * farmer who reaches it is not cut off — the app falls back to the model on
+ * the phone, or keeps the question for tomorrow.
+ */
+export const assistantLimiter = tier('assistant', 60_000, 6);
+export const assistantDailyLimiter = tier('assistant_daily', 24 * 60 * 60_000, env.SAHAYAK_DAILY_LIMIT);
+
+/**
  * File uploads. Bounded separately from other writes because the cost is
  * bandwidth and storage rather than database work.
  */

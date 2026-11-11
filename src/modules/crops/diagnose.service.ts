@@ -4,7 +4,18 @@ import * as ort from 'onnxruntime-node';
 import sharp from 'sharp';
 import type { DiseasePrediction } from '@agronavis/shared-types';
 import { logger } from '../../config/logger';
+import {
+  labelsFromV1,
+  parseLabelSet,
+  readableClass,
+  readForCrop,
+  softmax,
+  cropKey,
+  type LabelSet,
+} from './disease-labels';
 import { scorePlant, type PlantGate } from './plant-gate.service';
+
+export { readableClass } from './disease-labels';
 
 /**
  * Plant disease classification, run inside this process.
@@ -14,15 +25,18 @@ import { scorePlant, type PlantGate } from './plant-gate.service';
  * arrives, which will not start on a 512 MB instance. Exported to ONNX the same
  * weights are 43 MB and run under onnxruntime in roughly 120 MB, so the API
  * keeps one service instead of depending on a second one being alive.
+ *
+ * Two generations of weights can sit in model/:
+ *  · v1 — the original ResNet-18, trained on lab photographs of single leaves.
+ *  · v2 — trained by ml/disease/train_disease_v2.ipynb on field photographs,
+ *    with the crops West Bengal actually grows. Used whenever its files are
+ *    present; v1 is the fallback, so dropping v2 in needs no code change.
  */
 const MODEL_DIR = path.join(__dirname, '../../../model');
-const MODEL_PATH = path.join(MODEL_DIR, 'plant_disease_resnet18.onnx');
-const CLASSES_PATH = path.join(MODEL_DIR, 'class_names.json');
-
-/** ImageNet statistics; the model was fine-tuned on a backbone trained with them. */
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
-const SIDE = 224;
+const V1_MODEL = path.join(MODEL_DIR, 'plant_disease_resnet18.onnx');
+const V1_CLASSES = path.join(MODEL_DIR, 'class_names.json');
+const V2_MODEL = path.join(MODEL_DIR, 'v2', 'disease_v2.onnx');
+const V2_LABELS = path.join(MODEL_DIR, 'v2', 'labels.json');
 
 /**
  * Below this the answer is not worth putting in front of a farmer.
@@ -113,87 +127,75 @@ export function refusedByGate(gate: PlantGate): boolean {
   return gate.available && gate.topIsNotCrop && gate.topScore >= MIN_NOT_CROP_SCORE;
 }
 
+/**
+ * How much of the model's belief must sit on the crop the farmer named before
+ * the answer counts as confident. Below this the photograph probably is not
+ * that crop — or not a leaf the model can read — and a ranking among that
+ * crop's diseases would be a guess dressed as a diagnosis.
+ */
+const MIN_CROP_MASS = 0.3;
+
 let session: ort.InferenceSession | null = null;
-let classes: string[] = [];
+let labels: LabelSet | null = null;
 let loadFailed = false;
 
-/** Loaded once, on the first scan rather than at boot, so a missing model file
- *  cannot stop the API serving everything else. */
+async function open(modelPath: string): Promise<ort.InferenceSession> {
+  return ort.InferenceSession.create(modelPath, {
+    executionProviders: ['cpu'],
+    graphOptimizationLevel: 'all',
+  });
+}
+
+/**
+ * Loaded once, on the first scan rather than at boot, so a missing model file
+ * cannot stop the API serving everything else. v2 is preferred; if its files
+ * are missing or do not agree with each other, v1 answers instead.
+ */
 async function ready(): Promise<boolean> {
-  if (session) return true;
+  if (session && labels) return true;
   if (loadFailed) return false;
 
+  if (fs.existsSync(V2_MODEL) && fs.existsSync(V2_LABELS)) {
+    try {
+      const candidate = await open(V2_MODEL);
+      const outputs = (candidate as unknown as { outputMetadata?: { shape?: unknown[] }[] }).outputMetadata?.[0]?.shape;
+      const width = Array.isArray(outputs) ? Number(outputs[outputs.length - 1]) : undefined;
+      labels = parseLabelSet(
+        JSON.parse(fs.readFileSync(V2_LABELS, 'utf8')),
+        Number.isFinite(width) && (width as number) > 0 ? width : undefined,
+      );
+      session = candidate;
+      logger.info('Disease model loaded', { version: labels.version, classes: labels.classes.length });
+      return true;
+    } catch (error) {
+      logger.error('Disease model v2 could not be used; falling back to v1', {
+        error: (error as Error).message,
+      });
+      session = null;
+      labels = null;
+    }
+  }
+
   try {
-    classes = JSON.parse(fs.readFileSync(CLASSES_PATH, 'utf8')) as string[];
-    session = await ort.InferenceSession.create(MODEL_PATH, {
-      executionProviders: ['cpu'],
-      graphOptimizationLevel: 'all',
-    });
-    logger.info('Disease model loaded', { classes: classes.length });
+    labels = labelsFromV1(JSON.parse(fs.readFileSync(V1_CLASSES, 'utf8')) as string[]);
+    session = await open(V1_MODEL);
+    logger.info('Disease model loaded', { version: labels.version, classes: labels.classes.length });
     return true;
   } catch (error) {
     loadFailed = true;
+    session = null;
+    labels = null;
     logger.error('Disease model failed to load', { error: (error as Error).message });
     return false;
   }
 }
 
-/**
- * Turns "tomato_late_blight" into something a farmer reads.
- *
- * The class key stays on the prediction: it is what the scan is filed under and
- * what the reference library is keyed on.
- */
-/**
- * The training set names some crops twice. Its disease classes say `grape_*`
- * and `bell_pepper_*` while its healthy ones say `healthy_grapes` and
- * `healthy_pepper`, so the same crop reached the farmer as two entries in the
- * library's filter — Grape beside Grapes, Bell Pepper beside Pepper.
- *
- * The class list itself cannot be renamed: its order is the model's output
- * order, and editing it would silently map every prediction to the wrong
- * disease. So the names are reconciled here, at the one place a class key
- * becomes words, which is also what the reference library is seeded from.
- */
-const CROP_ALIASES: Record<string, string> = {
-  grapes: 'grape',
-  pepper: 'bell pepper',
-};
-
-const canonical = (crop: string): string => CROP_ALIASES[crop] ?? crop;
-
-export function readableClass(key: string): { crop: string; condition: string; healthy: boolean } {
-  const title = (s: string) =>
-    canonical(s.replace(/_/g, ' ').trim().toLowerCase())
-      .replace(/\b[a-z]/g, (c) => c.toUpperCase());
-
-  if (key.startsWith('healthy_')) {
-    return { crop: title(key.slice('healthy_'.length)), condition: 'Healthy', healthy: true };
-  }
-  if (key.startsWith('diseased_')) {
-    return {
-      crop: title(key.slice('diseased_'.length)),
-      condition: 'Disease present, not identified',
-      healthy: false,
-    };
-  }
-
-  const parts = key.split('_');
-  // The one crop in the set whose name is two words.
-  const span = key.startsWith('bell_pepper') ? 2 : 1;
-  return {
-    crop: title(parts.slice(0, span).join(' ')),
-    condition: title(parts.slice(span).join(' ')),
-    healthy: false,
-  };
-}
-
-/** Softmax over the raw logits, so scores read as probabilities. */
-function softmax(logits: Float32Array): number[] {
-  const max = Math.max(...logits);
-  const exps = Array.from(logits, (v) => Math.exp(v - max));
-  const total = exps.reduce((a, b) => a + b, 0);
-  return exps.map((v) => v / total);
+export interface DiagnoseOptions {
+  /**
+   * What the farmer says this crop is. When the model knows the crop, the
+   * answer is chosen among that crop's conditions only.
+   */
+  crop?: string | null;
 }
 
 /**
@@ -203,10 +205,11 @@ function softmax(logits: Float32Array): number[] {
  * the plant, is better placed to choose between "early blight" and "late
  * blight" than a model working from one photograph.
  */
-export async function diagnose(image: Buffer): Promise<DiseasePrediction> {
-  if (!(await ready()) || !session) {
+export async function diagnose(image: Buffer, options: DiagnoseOptions = {}): Promise<DiseasePrediction> {
+  if (!(await ready()) || !session || !labels) {
     return { available: false, confident: false, plantDetected: true, predictions: [] };
   }
+  const side = labels.size;
 
   // Decoded once, shared with the plant gate below.
   const decoded = sharp(image).removeAlpha();
@@ -215,7 +218,7 @@ export async function diagnose(image: Buffer): Promise<DiseasePrediction> {
   // expects (NCHW), which is not the interleaved order sharp returns.
   const { data } = await decoded
     .clone()
-    .resize(SIDE, SIDE, { fit: 'fill' })
+    .resize(side, side, { fit: 'fill' })
     .raw()
     .toBuffer({ resolveWithObject: true });
 
@@ -242,31 +245,52 @@ export async function diagnose(image: Buffer): Promise<DiseasePrediction> {
     return { available: true, confident: false, plantDetected: false, predictions: [] };
   }
 
-  const pixels = SIDE * SIDE;
+  const pixels = side * side;
   const input = new Float32Array(3 * pixels);
   for (let i = 0; i < pixels; i += 1) {
     for (let c = 0; c < 3; c += 1) {
-      input[c * pixels + i] = (data[i * 3 + c]! / 255 - MEAN[c]!) / STD[c]!;
+      input[c * pixels + i] = (data[i * 3 + c]! / 255 - labels.mean[c]!) / labels.std[c]!;
     }
   }
 
   const output = await session.run({
-    image: new ort.Tensor('float32', input, [1, 3, SIDE, SIDE]),
+    image: new ort.Tensor('float32', input, [1, 3, side, side]),
   });
 
   const logits = output.logits!.data as Float32Array;
-  const scores = softmax(logits);
+  // A label file that does not match its weights would name the wrong disease
+  // for every photograph. Better no answer than that.
+  if (logits.length !== labels.classes.length) {
+    logger.error('Disease model and labels disagree', {
+      outputs: logits.length,
+      labels: labels.classes.length,
+      version: labels.version,
+    });
+    return { available: false, confident: false, plantDetected: true, predictions: [] };
+  }
+  const scores = softmax(logits, labels.temperature);
+  const classes = labels.classes;
 
-  const ranked = scores
-    .map((confidence, index) => ({ confidence, key: classes[index] ?? `class_${index}` }))
-    .sort((a, b) => b.confidence - a.confidence)
+  const forCrop = options.crop ? readForCrop(scores, labels, options.crop) : null;
+  const ranked = (forCrop
+    ? forCrop.ranked
+    : scores.map((confidence, index) => ({ index, confidence })).sort((a, b) => b.confidence - a.confidence)
+  )
     .slice(0, 3)
-    .map(({ key, confidence }) => ({ classKey: key, confidence, ...readableClass(key) }));
+    .map(({ index, confidence }) => {
+      const c = classes[index];
+      return c
+        ? { classKey: c.key, confidence, crop: c.crop, condition: c.condition, healthy: c.healthy }
+        : { classKey: `class_${index}`, confidence, ...readableClass(`class_${index}`) };
+    });
 
+  const topSure = (ranked[0]?.confidence ?? 0) >= MIN_CONFIDENCE;
   return {
     available: true,
-    confident: (ranked[0]?.confidence ?? 0) >= MIN_CONFIDENCE,
+    confident: forCrop ? topSure && forCrop.cropMass >= MIN_CROP_MASS : topSure,
     plantDetected: true,
     predictions: ranked,
+    crop: forCrop ? cropKey(options.crop) : null,
+    modelVersion: labels.version,
   };
 }
